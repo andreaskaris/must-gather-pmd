@@ -7,15 +7,27 @@ EXTRACT_TIMEOUT=600s
 BASE_COLLECTION_PATH="must-gather"
 LOG_PATH="${BASE_COLLECTION_PATH}/pmd_logs"
 
-# print can be enabled or disabled on demand
-print () {
+# verbose can be enabled or disabled on demand
+verbose () {
   [[ "${VERBOSE}" ]] && echo "$@" >&2
 }
 
 get_collection_image() {
     local pod_name
     pod_name="${1:-}"
+
+    verbose "Getting collection image from pod '${pod_name}'"
+
     kubectl get pods "${pod_name}" -o jsonpath='{.spec.containers[0].image}'
+}
+
+save_collector_logs() {
+    local pod_name
+    pod_name="$1"
+
+    verbose "Saving logs from collector pod '${pod_name}'"
+
+    kubectl logs -c data-collector "${pod_name}" > "/must-gather/${pod_name}.log"
 }
 
 collect_data() {
@@ -28,11 +40,17 @@ collect_data() {
     local process
     process="$4"
 
+    verbose  "Collecting data for node: '${node}', pod_name: '${pod_name}', image: '${image}', process: '${process}'"
+
     run_data_collection_pod "${node}" "${pod_name}" "${image}" "${process}"
     if kubectl wait --for=condition=Ready pod "${pod_name}" --timeout="${EXTRACT_TIMEOUT}"; then
-      kubectl cp -c sleep-infinity "${pod_name}:/must-gather" /must-gather
-      kubectl delete pod "${pod_name}"
+        verbose  "Data collection succeeded"
+        save_collector_logs "${pod_name}"
+        kubectl cp -c sleep-infinity "${pod_name}:/must-gather" /must-gather
+        kubectl delete pod "${pod_name}"
     else
+        verbose  "Data timed out"
+        save_collector_logs "${pod_name}"
         kubectl delete pod --force --grace-period=0 "${pod_name}"
     fi
 }

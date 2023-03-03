@@ -1,6 +1,8 @@
 #!/bin/bash
+# Author: Andreas Karis <ak.karis@gmail.com, akaris@redhat.com>
+# A lot of the commands in this script are based on https://github.com/karampok/snife/blob/main/bin/dpdk-prof.sh
 
-set -eu
+set -eux
 
 VERBOSE=true
 HOST_PATH="/host"
@@ -9,15 +11,15 @@ LOG_PATH="${BASE_COLLECTION_PATH}/pmd_logs"
 mkdir -p "${LOG_PATH}"
 cd "${LOG_PATH}"
 
-# print can be enabled or disabled on demand
-print () {
+# verbose can be enabled or disabled on demand
+verbose () {
   [[ "${VERBOSE}" ]] && echo "$@" >&2
 }
 
 # get_pid returns the provided parameter as is if it is a number. Otherwise it will try to find the process ID of the
 # provided process.
 get_pid() {
-  print "Getting process PID for ${1}"
+  verbose "Getting process PID for ${1}"
   local parameter="${1}"
   local pid="${parameter}"
   local re='^[0-9]+$'
@@ -30,7 +32,7 @@ get_pid() {
 # get_process_cpus returns the CPUs that this process and its children are running on in the format "1 2 5 7 12".
 # See: https://stackoverflow.com/questions/50430036/how-can-a-linux-cpuset-be-iterated-over-with-shell
 get_process_cpus() {
-  print "Getting CPUs for PID ${1}"
+  verbose "Getting CPUs for PID ${1}"
   local pid="${1}"
   local cgroup
   cgroup=$(cat "${HOST_PATH}/proc/${pid}/cpuset")
@@ -43,7 +45,7 @@ get_process_cpus() {
 
 # collect_ftrace_events collects the ftrace events on the provided list of CPUs.
 collect_ftrace_events() {
-  print "Getting ftrace events for CPUs $*"
+  verbose "Getting ftrace events for CPUs $*"
   local dir=ftrace_events
   mkdir -p "${dir}"
   echo sched irq_vectors > "${HOST_PATH}/sys/kernel/debug/tracing/set_event"
@@ -57,7 +59,7 @@ collect_ftrace_events() {
 
 # collect_ftrace_function_graphs collects the ftrace function graph on the provided list of CPUs.
 collect_ftrace_function_graphs() {
-  print "Getting ftrace function graphs for CPUs $*"
+  verbose "Getting ftrace function graphs for CPUs $*"
   local dir=ftrace_function_graphs
   mkdir -p "${dir}"
   echo function_graph > "${HOST_PATH}/sys/kernel/debug/tracing/current_tracer"
@@ -69,6 +71,32 @@ collect_ftrace_function_graphs() {
   echo nop > "${HOST_PATH}/sys/kernel/debug/tracing/current_tracer"
 }
 
+collect_perf() {
+  verbose "Running perf for CPUs $*"
+  local dir=perf
+  mkdir -p "${dir}"
+  pushd "${dir}"
+  comma_separated_cpus=$(echo "$@" | sed 's/ /,/g')
+  perf record -z -C "${comma_separated_cpus}" sleep 10 &> /dev/null
+  for cpu in "$@";do
+    perf report -C "${cpu}" | cat &> "report_cpu_${cpu}.output"
+  done
+  perf report --sort=comm,dso | cat &> report_sort_comm_dso.output
+  perf report | cat &> report_stdio.output
+  popd
+}
+
+collect_sys_proc_etc() {
+  local sub_dir="${1}"
+  local dir="sys_proc/${sub_dir}"
+  verbose "Collecting relevant data from /sys and /proc and storing it in ${dir}"
+  mkdir -p "${dir}"
+  cat /host/proc/interrupts > "${dir}/interrupts"
+  cat /host/proc/iomem > "${dir}/iomem"
+  cat /host/proc/sched_debug > "${dir}/sched_debug"
+  dmesg > "${dir}/dmesg"
+}
+
 process="${1:-}"
 if [ "${process}" == "" ]; then
     echo "Please provided a process ID or process name."
@@ -78,3 +106,5 @@ pid=$(get_pid "${process}")
 cpus=$(get_process_cpus "${pid}")
 collect_ftrace_events ${cpus}
 collect_ftrace_function_graphs ${cpus}
+collect_perf ${cpus}
+collect_sys_proc_etc before && sleep 10 && collect_sys_proc_etc after
