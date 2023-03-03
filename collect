@@ -1,0 +1,80 @@
+#!/bin/bash
+
+set -eu
+
+VERBOSE=true
+HOST_PATH="/host"
+BASE_COLLECTION_PATH="must-gather"
+LOG_PATH="${BASE_COLLECTION_PATH}/pmd_logs"
+mkdir -p "${LOG_PATH}"
+cd "${LOG_PATH}"
+
+# print can be enabled or disabled on demand
+print () {
+  [[ "${VERBOSE}" ]] && echo "$@" >&2
+}
+
+# get_pid returns the provided parameter as is if it is a number. Otherwise it will try to find the process ID of the
+# provided process.
+get_pid() {
+  print "Getting process PID for ${1}"
+  local parameter="${1}"
+  local pid="${parameter}"
+  local re='^[0-9]+$'
+  if ! [[ $parameter =~ $re ]] ; then
+    pid=$(pidof "${parameter}")
+  fi
+  echo "${pid}"
+}
+
+# get_process_cpus returns the CPUs that this process and its children are running on in the format "1 2 5 7 12".
+# See: https://stackoverflow.com/questions/50430036/how-can-a-linux-cpuset-be-iterated-over-with-shell
+get_process_cpus() {
+  print "Getting CPUs for PID ${1}"
+  local pid="${1}"
+  local cgroup
+  cgroup=$(cat "${HOST_PATH}/proc/${pid}/cpuset")
+  local cpuset
+  cpuset=$(cat "${HOST_PATH}/sys/fs/cgroup/cpuset/${cgroup}/cpuset.cpus")
+  local cpus
+  cpus=$(echo "${cpuset}" | awk '/-/{for (i=$1; i<=$2; i++)printf "%s%s",i,ORS;next} 1' ORS=' ' RS=, FS=-)
+  echo "${cpus}"
+}
+
+# collect_ftrace_events collects the ftrace events on the provided list of CPUs.
+collect_ftrace_events() {
+  print "Getting ftrace events for CPUs $*"
+  local dir=ftrace_events
+  mkdir -p "${dir}"
+  echo sched irq_vectors > "${HOST_PATH}/sys/kernel/debug/tracing/set_event"
+  echo 1 > "${HOST_PATH}/sys/kernel/debug/tracing/tracing_on" && sleep 10 && echo 0 > \
+      "${HOST_PATH}/sys/kernel/debug/tracing/tracing_on"
+  for c in "$@";do
+    cat "${HOST_PATH}/sys/kernel/debug/tracing/per_cpu/cpu${c}/trace" > "${dir}/cpu${c}.txt"
+  done
+  echo > "${HOST_PATH}/sys/kernel/debug/tracing/set_event"
+}
+
+# collect_ftrace_function_graphs collects the ftrace function graph on the provided list of CPUs.
+collect_ftrace_function_graphs() {
+  print "Getting ftrace function graphs for CPUs $*"
+  local dir=ftrace_function_graphs
+  mkdir -p "${dir}"
+  echo function_graph > "${HOST_PATH}/sys/kernel/debug/tracing/current_tracer"
+  echo 1 > "${HOST_PATH}/sys/kernel/debug/tracing/tracing_on" && sleep 10 && echo 0 > \
+      "${HOST_PATH}/sys/kernel/debug/tracing/tracing_on"
+  for c in "$@";do
+    cat "${HOST_PATH}/sys/kernel/debug/tracing/per_cpu/cpu${c}/trace" > "${dir}/cpu${c}.txt"
+  done
+  echo nop > "${HOST_PATH}/sys/kernel/debug/tracing/current_tracer"
+}
+
+process="${1:-}"
+if [ "${process}" == "" ]; then
+    echo "Please provided a process ID or process name."
+    exit 1
+fi
+pid=$(get_pid "${process}")
+cpus=$(get_process_cpus "${pid}")
+collect_ftrace_events ${cpus}
+collect_ftrace_function_graphs ${cpus}

@@ -3,78 +3,106 @@
 set -eu
 
 VERBOSE=true
-HOST_PATH="/host"
 BASE_COLLECTION_PATH="must-gather"
 LOG_PATH="${BASE_COLLECTION_PATH}/pmd_logs"
-mkdir -p "${LOG_PATH}"
-cd "${LOG_PATH}"
 
 # print can be enabled or disabled on demand
 print () {
   [[ "${VERBOSE}" ]] && echo "$@" >&2
 }
 
-# get_pid returns the provided parameter as is if it is a number. Otherwise it will try to find the process ID of the
-# provided process.
-get_pid() {
-  print "Getting process PID for ${1}"
-  local parameter="${1}"
-  local pid="${parameter}"
-  local re='^[0-9]+$'
-  if ! [[ $parameter =~ $re ]] ; then
-    pid=$(pidof "${parameter}")
-  fi
-  echo "${pid}"
+get_collection_image() {
+    local pod_name
+    pod_name="${1:-}"
+    kubectl get pods "${pod_name}" -o jsonpath='{.spec.containers[0].image}'
 }
 
-# get_process_cpus returns the CPUs that this process and its children are running on in the format "1 2 5 7 12".
-# See: https://stackoverflow.com/questions/50430036/how-can-a-linux-cpuset-be-iterated-over-with-shell
-get_process_cpus() {
-  print "Getting CPUs for PID ${1}"
-  local pid="${1}"
-  local cgroup
-  cgroup=$(cat "${HOST_PATH}/proc/${pid}/cpuset")
-  local cpuset
-  cpuset=$(cat "${HOST_PATH}/sys/fs/cgroup/cpuset/${cgroup}/cpuset.cpus")
-  local cpus
-  cpus=$(echo "${cpuset}" | awk '/-/{for (i=$1; i<=$2; i++)printf "%s%s",i,ORS;next} 1' ORS=' ' RS=, FS=-)
-  echo "${cpus}"
+start_data_collection() {
+    local node
+    node="$1"
+    local pod_name
+    pod_name="$2"
+    local image
+    image="$3"
+    local process
+    process="$4"
+
+    cat << EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${pod_name}
+  labels:
+    name: gather-pmd
+spec:
+  containers:
+  - command:
+    - collect
+    - ${process}
+    env:
+    - name: TMOUT
+      value: "900"
+    image: ${image}
+    imagePullPolicy: Always
+    name: container-00
+    resources: {}
+    securityContext:
+      privileged: true
+      runAsUser: 0
+    terminationMessagePath: /dev/termination-log
+    terminationMessagePolicy: File
+    volumeMounts:
+    - mountPath: /host
+      name: host
+  dnsPolicy: ClusterFirst
+  enableServiceLinks: true
+  hostIPC: true
+  hostNetwork: true
+  hostPID: true
+  nodeName: ${node}
+  preemptionPolicy: PreemptLowerPriority
+  priority: 1000000000
+  priorityClassName: openshift-user-critical
+  restartPolicy: Never
+  schedulerName: default-scheduler
+  securityContext: {}
+  serviceAccount: default
+  serviceAccountName: default
+  terminationGracePeriodSeconds: 30
+  tolerations:
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300
+  volumes:
+  - hostPath:
+      path: /
+      type: Directory
+    name: host
+EOF
 }
 
-# collect_ftrace_events collects the ftrace events on the provided list of CPUs.
-collect_ftrace_events() {
-  print "Getting ftrace events for CPUs $*"
-  local dir=ftrace_events
-  mkdir -p "${dir}"
-  echo sched irq_vectors > "${HOST_PATH}/sys/kernel/debug/tracing/set_event"
-  echo 1 > "${HOST_PATH}/sys/kernel/debug/tracing/tracing_on" && sleep 10 && echo 0 > \
-      "${HOST_PATH}/sys/kernel/debug/tracing/tracing_on"
-  for c in "$@";do
-    cat "${HOST_PATH}/sys/kernel/debug/tracing/per_cpu/cpu${c}/trace" > "${dir}/cpu${c}.txt"
-  done
-  echo > "${HOST_PATH}/sys/kernel/debug/tracing/set_event"
-}
-
-# collect_ftrace_function_graphs collects the ftrace function graph on the provided list of CPUs.
-collect_ftrace_function_graphs() {
-  print "Getting ftrace function graphs for CPUs $*"
-  local dir=ftrace_function_graphs
-  mkdir -p "${dir}"
-  echo function_graph > "${HOST_PATH}/sys/kernel/debug/tracing/current_tracer"
-  echo 1 > "${HOST_PATH}/sys/kernel/debug/tracing/tracing_on" && sleep 10 && echo 0 > \
-      "${HOST_PATH}/sys/kernel/debug/tracing/tracing_on"
-  for c in "$@";do
-    cat "${HOST_PATH}/sys/kernel/debug/tracing/per_cpu/cpu${c}/trace" > "${dir}/cpu${c}.txt"
-  done
-  echo nop > "${HOST_PATH}/sys/kernel/debug/tracing/current_tracer"
-}
-
-process="${1-""}"
+NODE_NAME="${NODE_NAME-""}"
+if [ -z "${NODE_NAME}" ]; then
+    echo "Must provide a node name to run collection on"
+    exit 1
+fi
+POD_NAME="${POD_NAME-""}"
+if [ -z "${POD_NAME}" ]; then
+    echo "Must provide the name of the must-gather pod"
+    exit 1
+fi
+process="${1:-}"
 if [ "${process}" == "" ]; then
     echo "Please provided a process ID or process name."
     exit 1
 fi
-pid=$(get_pid "${process}")
-cpus=$(get_process_cpus "${pid}")
-collect_ftrace_events ${cpus}
-collect_ftrace_function_graphs ${cpus}
+
+mkdir -p "${LOG_PATH}"
+cd "${LOG_PATH}"
+image=$(get_collection_image "${POD_NAME}")
+start_data_collection "${NODE_NAME}" collect-pmd-info "${image}" "${process}"
