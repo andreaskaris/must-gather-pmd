@@ -3,6 +3,7 @@
 set -eu
 
 VERBOSE=true
+EXTRACT_TIMEOUT=600s
 BASE_COLLECTION_PATH="must-gather"
 LOG_PATH="${BASE_COLLECTION_PATH}/pmd_logs"
 
@@ -17,7 +18,26 @@ get_collection_image() {
     kubectl get pods "${pod_name}" -o jsonpath='{.spec.containers[0].image}'
 }
 
-start_data_collection() {
+collect_data() {
+    local node
+    node="$1"
+    local pod_name
+    pod_name="$2"
+    local image
+    image="$3"
+    local process
+    process="$4"
+
+    run_data_collection_pod "${node}" "${pod_name}" "${image}" "${process}"
+    if kubectl wait --for=condition=Ready pod "${pod_name}" --timeout="${EXTRACT_TIMEOUT}"; then
+      kubectl cp -c sleep-infinity "${pod_name}:/must-gather" /must-gather
+      kubectl delete pod "${pod_name}"
+    else
+        kubectl delete pod --force --grace-period=0 "${pod_name}"
+    fi
+}
+
+run_data_collection_pod() {
     local node
     node="$1"
     local pod_name
@@ -35,7 +55,7 @@ metadata:
   labels:
     name: gather-pmd
 spec:
-  containers:
+  initContainers:
   - command:
     - collect
     - ${process}
@@ -44,7 +64,7 @@ spec:
       value: "900"
     image: ${image}
     imagePullPolicy: Always
-    name: container-00
+    name: data-collector
     resources: {}
     securityContext:
       privileged: true
@@ -54,6 +74,18 @@ spec:
     volumeMounts:
     - mountPath: /host
       name: host
+    - mountPath: /must-gather
+      name: data-store
+  containers:
+  - command:
+    - sleep
+    - infinity
+    image: ${image}
+    imagePullPolicy: Always
+    name: sleep-infinity
+    volumeMounts:
+    - mountPath: /must-gather
+      name: data-store
   dnsPolicy: ClusterFirst
   enableServiceLinks: true
   hostIPC: true
@@ -83,6 +115,9 @@ spec:
       path: /
       type: Directory
     name: host
+  - emptyDir:
+      sizeLimit: 10Gi
+    name: data-store
 EOF
 }
 
@@ -105,4 +140,4 @@ fi
 mkdir -p "${LOG_PATH}"
 cd "${LOG_PATH}"
 image=$(get_collection_image "${POD_NAME}")
-start_data_collection "${NODE_NAME}" collect-pmd-info "${image}" "${process}"
+collect_data "${NODE_NAME}" collect-pmd-info "${image}" "${process}"
