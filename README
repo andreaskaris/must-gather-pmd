@@ -6,5 +6,5 @@ you want to investigate. Then, run `oc adm must-gather` with the following comma
 export KUBECONFIG=<path to your kubeconfig>
 NODE_NAME=<node>
 PROCESS=<pid or process name>
-oc adm must-gather --image=quay.io/akaris/must-gather-pmd:latest --host-network=true --node-name=${NODE_NAME} -- gather.sh ${PROCESS}
+oc adm must-gather --image=quay.io/akaris/must-gather-pmd:latest --host-network=true --node-name=${NODE_NAME} -- gather ${PROCESS}
 ~~~
