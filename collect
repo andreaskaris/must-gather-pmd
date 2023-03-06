@@ -102,8 +102,10 @@ collect_top() {
 collect_pcm() {
   local pid="${1}"
   local dir=pcm
-  pcm 1 -i=10 -f
-  pcm 1 -i=10 -f -pid "${pid}"
+  mkdir -p "${dir}"
+  verbose "Collecting PCM information and storing it in ${dir}"
+  pcm 1 -i=10 -f | cat &> "${dir}/pcm_1_-i=10"
+  pcm 1 -i=10 -f -pid "${pid}" | cat &> "${dir}/pcm_1_-i=10_-f_-pid_${pid}"
 }
 
 collect_sys_proc_etc() {
@@ -117,7 +119,7 @@ collect_sys_proc_etc() {
   cat /host/proc/sched_debug > "${dir}/sched_debug"
   dmesg > "${dir}/dmesg"
   sysctl -A > "${dir}/sysctl_-A"
-  ps -ae -o pid= | xargs -n 1 taskset -cp > "${dir}/ps_-ae_-o_pid=_xargs_-n_1_taskset_-cp"
+  # ps -ae -o pid= | xargs -n 1 taskset -cp > "${dir}/ps_-ae_-o_pid=_xargs_-n_1_taskset_-cp"
   ps -eo pid,tid,class,rtprio,ni,pri,psr,pcpu,stat,wchan:14,comm,cls > \
       "${dir}/ps_-eo_pid_tid_class_rtprio_ni_pri_psr_pcpu_stat_wchan_comm_cls"
   pstree -p "${pid}" > "${dir}/pstree_p_${pid}"
@@ -139,5 +141,5 @@ collect_ftrace_events ${cpus}
 collect_ftrace_function_graphs ${cpus}
 collect_perf ${cpus}
 collect_top "${pid}"
-collect_pcm "${pid}"
-collect_sys_proc_etc "${pid}" before && sleep 10 && collect_sys_proc_etc "${pid} "after
+# collect_pcm "${pid}"
+collect_sys_proc_etc "${pid}" before && sleep 10 && collect_sys_proc_etc "${pid}" after

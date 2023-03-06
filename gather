@@ -12,6 +12,22 @@ verbose () {
   [[ "${VERBOSE}" ]] && echo "$@" >&2
 }
 
+wait_for() {
+  local pod_name="${1}"
+  kubectl wait --for=condition=Ready pod "${pod_name}" --timeout="${EXTRACT_TIMEOUT}" &
+  local pid1=$!
+  kubectl wait --for=jsonpath='{.status.phase}'=Failed pod "${pod_name}" --timeout="${EXTRACT_TIMEOUT}" &
+  local pid2=$!
+  while kill -0 "${pid1}" && kill -0 "${pid2}"; do
+      verbose "Waiting for pod condition to be met for pod ${pod_name}"
+      sleep 5
+  done
+  if ! kill -0 "${pid1}"; then
+    return 0
+  fi
+  return 1
+}
+
 get_collection_image() {
     local pod_name
     pod_name="${1:-}"
@@ -43,13 +59,13 @@ collect_data() {
     verbose  "Collecting data for node: '${node}', pod_name: '${pod_name}', image: '${image}', process: '${process}'"
 
     run_data_collection_pod "${node}" "${pod_name}" "${image}" "${process}"
-    if kubectl wait --for=condition=Ready pod "${pod_name}" --timeout="${EXTRACT_TIMEOUT}"; then
+    if wait_for "${pod_name}"; then
         verbose  "Data collection succeeded"
         save_collector_logs "${pod_name}"
         kubectl cp -c sleep-infinity "${pod_name}:/must-gather" /must-gather
         kubectl delete pod "${pod_name}"
     else
-        verbose  "Data timed out"
+        verbose  "Data timed out or failed"
         save_collector_logs "${pod_name}"
         kubectl delete pod --force --grace-period=0 "${pod_name}"
     fi
