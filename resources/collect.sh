@@ -6,7 +6,8 @@ set -eux
 
 VERBOSE=true
 HOST_PATH="/host"
-BASE_COLLECTION_PATH="must-gather"
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+BASE_COLLECTION_PATH="data-store"
 LOG_PATH="${BASE_COLLECTION_PATH}/pmd_logs"
 mkdir -p "${LOG_PATH}"
 cd "${LOG_PATH}"
@@ -141,16 +142,16 @@ collect_sys_proc_etc() {
   ps -eo pid,tid,class,rtprio,ni,pri,psr,pcpu,stat,wchan:14,comm,cls > \
       "${dir}/ps_-eo_pid_tid_class_rtprio_ni_pri_psr_pcpu_stat_wchan_comm_cls"
   pstree -p "${pid}" > "${dir}/pstree_p_${pid}"
-  ip --json link > "${dir}/ip_--json_link"
+  ip -s -s --json link > "${dir}/ip_-s_-s_--json_link"
   numastat -m -n -v > "${dir}/numastat_-m_-n_-v"
   numastat -m -n -v -p "${pid}" > "${dir}/numastat_-m_-n_-v_-p_${pid}"
   numactl -show > "${dir}/numactl_-show"
   numactl --hardware > "${dir}/numactl_--hardware"
 }
 
-process="${1:-}"
+process="${PROCESS:-}"
 if [ "${process}" == "" ]; then
-    verbose "Please provide a process ID or process name."
+    verbose "Please provide a process ID or process name via environment variable PROCESS."
     exit 1
 fi
 pid=$(get_pid "${process}")
@@ -161,4 +162,11 @@ collect_ftrace_function_graphs ${cpus}
 collect_perf ${cpus}
 collect_top "${pid}"
 # collect_pcm "${pid}"
-collect_sys_proc_etc "${pid}" before && sleep 10 && collect_sys_proc_etc "${pid}" after
+
+# Collect various interface counters and counters from /sys, /proc 10 seconds apart.
+# Calculate delta for interface counters.
+first_sample="before"
+second_sample="after"
+sleep_interval=10
+collect_sys_proc_etc "${pid}" "${first_sample}" && sleep "${sleep_interval}" && collect_sys_proc_etc "${pid}" "${second_sample}"
+python "${SCRIPT_DIR}"/ip_link_delta.py "sys_proc/${first_sample}/ip_-s_-s_--json_link" "sys_proc/${second_sample}/ip_-s_-s_--json_link" "${sleep_interval}" > sys_proc/interface_counters_delta.txt

@@ -1,0 +1,16 @@
+resources:
+- pod.yaml
+
+patches:
+- path: patch-selector.json
+- path: patch-env.json
+
+configMapGenerator:
+- name: scripts
+  files:
+  - collect.sh
+  - ip_link_delta.py
+
+images:
+- name: collect-image
+  newName: quay.io/akaris/must-gather-pmd:v0.1

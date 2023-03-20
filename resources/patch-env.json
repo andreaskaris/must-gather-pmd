@@ -1,0 +1,28 @@
+{                                                                                                                       
+  "apiVersion": "apps/v1",                                                                                              
+  "kind": "DaemonSet",                                                                                                  
+  "metadata": {                                                                                                         
+    "name": "collect-pmd-info"                                                                                           
+  },                                                                                                                    
+  "spec": {                                                                                                             
+    "template": {
+      "spec": {
+        "initContainers": [
+          {
+            "name": "data-collector",
+            "env": [
+              {
+                "name": "TIMEOUT",
+                "value": "900"
+              },
+              {
+                "name": "PROCESS",
+                "value": "process"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
